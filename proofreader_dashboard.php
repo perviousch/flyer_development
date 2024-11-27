@@ -1,14 +1,25 @@
 <?php
 session_start();
-require_once 'config/database.php';
+require_once __DIR__ . '/config/database.php';
 
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'proof_reader') {
     header("Location: login.php");
     exit;
 }
 
-$stmt = $pdo->query("SELECT * FROM projects WHERE status = 'draft_review' ORDER BY created_at DESC");
-$projects = $stmt->fetchAll();
+// Fetch projects that need review
+$stmt = $pdo->prepare("
+    SELECT p.*, 
+           (SELECT COUNT(*) FROM project_checks pc 
+            WHERE pc.project_id = p.id 
+            AND pc.user_id = :user_id 
+            AND pc.draft_number = p.current_draft) as checked
+    FROM projects p 
+    WHERE p.status IN ('design_pending', 'draft_review') 
+    ORDER BY p.created_at DESC
+");
+$stmt->execute(['user_id' => $_SESSION['user_id']]);
+$projects = $stmt->fetchAll(PDO::FETCH_ASSOC);
 ?>
 
 <!DOCTYPE html>
@@ -30,30 +41,38 @@ $projects = $stmt->fetchAll();
         </nav>
         <section id="projects">
             <h2>Projects for Review</h2>
-            <table>
-                <thead>
-                    <tr>
-                        <th>ID</th>
-                        <th>Name</th>
-                        <th>Status</th>
-                        <th>Created At</th>
-                        <th>Actions</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <?php foreach ($projects as $project): ?>
+            <?php if (empty($projects)): ?>
+                <p>No projects currently available for review.</p>
+            <?php else: ?>
+                <table>
+                    <thead>
                         <tr>
-                            <td><?php echo $project['id']; ?></td>
-                            <td><?php echo $project['name']; ?></td>
-                            <td><?php echo $project['status']; ?></td>
-                            <td><?php echo $project['created_at']; ?></td>
-                            <td>
-                                <a href="review_project.php?id=<?php echo $project['id']; ?>">Review</a>
-                            </td>
+                            <th>ID</th>
+                            <th>Name</th>
+                            <th>Status</th>
+                            <th>Current Draft</th>
+                            <th>Created At</th>
+                            <th>Checked</th>
+                            <th>Actions</th>
                         </tr>
-                    <?php endforeach; ?>
-                </tbody>
-            </table>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($projects as $project): ?>
+                            <tr>
+                                <td><?php echo htmlspecialchars($project['id']); ?></td>
+                                <td><?php echo htmlspecialchars($project['name']); ?></td>
+                                <td><?php echo htmlspecialchars($project['status']); ?></td>
+                                <td><?php echo htmlspecialchars($project['current_draft']); ?></td>
+                                <td><?php echo htmlspecialchars($project['created_at']); ?></td>
+                                <td><?php echo $project['checked'] ? 'Yes' : 'No'; ?></td>
+                                <td>
+                                    <a href="project_review.php?id=<?php echo $project['id']; ?>" class="btn">Review</a>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            <?php endif; ?>
         </section>
     </div>
 </body>

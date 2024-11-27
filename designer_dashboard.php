@@ -1,13 +1,17 @@
 <?php
 session_start();
-require_once 'config/database.php';
+require_once __DIR__ . '/config/database.php';
 
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'designer') {
     header("Location: login.php");
     exit;
 }
 
-$stmt = $pdo->query("SELECT * FROM projects WHERE status IN ('design_pending', 'draft_review') ORDER BY created_at DESC");
+$stmt = $pdo->query("SELECT p.*, 
+    (SELECT COUNT(*) FROM project_checks pc WHERE pc.project_id = p.id AND pc.user_id = {$_SESSION['user_id']}) as checked
+    FROM projects p 
+    WHERE p.status IN ('design_pending', 'draft_review') 
+    ORDER BY p.created_at DESC");
 $projects = $stmt->fetchAll();
 ?>
 
@@ -25,7 +29,6 @@ $projects = $stmt->fetchAll();
         <nav>
             <ul>
                 <li><a href="#projects">Projects</a></li>
-                <li><a href="#upload">Upload Design</a></li>
                 <li><a href="logout.php">Logout</a></li>
             </ul>
         </nav>
@@ -38,19 +41,20 @@ $projects = $stmt->fetchAll();
                         <th>Name</th>
                         <th>Status</th>
                         <th>Created At</th>
+                        <th>Checked</th>
                         <th>Actions</th>
                     </tr>
                 </thead>
                 <tbody>
                     <?php foreach ($projects as $project): ?>
                         <tr>
-                            <td><?php echo $project['id']; ?></td>
-                            <td><?php echo $project['name']; ?></td>
-                            <td><?php echo $project['status']; ?></td>
-                            <td><?php echo $project['created_at']; ?></td>
+                            <td><?php echo htmlspecialchars($project['id']); ?></td>
+                            <td><?php echo htmlspecialchars($project['name']); ?></td>
+                            <td><?php echo htmlspecialchars($project['status']); ?></td>
+                            <td><?php echo htmlspecialchars($project['created_at']); ?></td>
+                            <td><?php echo $project['checked'] ? 'Yes' : 'No'; ?></td>
                             <td>
-                                <a href="view_project.php?id=<?php echo $project['id']; ?>">View</a>
-                                <a href="upload_design.php?id=<?php echo $project['id']; ?>">Upload Design</a>
+                                <a href="project_details.php?id=<?php echo $project['id']; ?>" class="btn">View Details</a>
                             </td>
                         </tr>
                     <?php endforeach; ?>

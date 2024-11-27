@@ -9,7 +9,7 @@ if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'management') {
 
 // Fetch projects
 $stmt = $pdo->query("SELECT p.*, 
-    (SELECT COUNT(*) FROM project_checks pc WHERE pc.project_id = p.id) as check_count,
+    (SELECT COUNT(*) FROM project_checks pc WHERE pc.project_id = p.id AND pc.draft_number = p.current_draft) as check_count,
     (SELECT COUNT(*) FROM users WHERE role IN ('designer', 'proof_reader')) as total_users
     FROM projects p ORDER BY p.created_at DESC");
 $projects = $stmt->fetchAll();
@@ -33,6 +33,46 @@ $stmt = $pdo->prepare("SELECT p.* FROM projects p
     WHERE p.status = 'final_review' AND pc.id IS NULL");
 $stmt->execute([$_SESSION['user_id']]);
 $awaiting_check = $stmt->fetchAll();
+
+// Fetch new messages
+$stmt = $pdo->prepare("
+    SELECT cm.*, p.name as project_name, p.id as project_id
+    FROM chat_messages cm
+    JOIN projects p ON cm.project_id = p.id
+    LEFT JOIN viewed_messages vm ON cm.id = vm.message_id AND vm.user_id = ?
+    WHERE vm.id IS NULL
+    ORDER BY cm.created_at DESC
+");
+$stmt->execute([$_SESSION['user_id']]);
+$new_messages = $stmt->fetchAll();
+
+// Fetch new designer uploads
+$stmt = $pdo->prepare("
+    SELECT p.id, p.name, p.current_draft
+    FROM projects p
+    WHERE p.pdf_file_path IS NOT NULL
+    AND p.updated_at > (SELECT COALESCE(MAX(last_viewed), '1970-01-01') FROM project_views WHERE user_id = ?)
+    ORDER BY p.updated_at DESC
+");
+$stmt->execute([$_SESSION['user_id']]);
+$new_uploads = $stmt->fetchAll();
+
+// Fetch new proofreader checks
+$stmt = $pdo->prepare("
+    SELECT pc.*, p.name as project_name, u.username
+    FROM project_checks pc
+    JOIN projects p ON pc.project_id = p.id
+    JOIN users u ON pc.user_id = u.id
+    WHERE pc.check_date > (SELECT COALESCE(MAX(last_viewed), '1970-01-01') FROM check_views WHERE user_id = ?)
+    AND u.role = 'proof_reader'
+    ORDER BY pc.check_date DESC
+");
+$stmt->execute([$_SESSION['user_id']]);
+$new_checks = $stmt->fetchAll();
+
+// Update last viewed timestamps for uploads and checks
+$pdo->prepare("INSERT INTO project_views (user_id, last_viewed) VALUES (?, NOW()) ON DUPLICATE KEY UPDATE last_viewed = NOW()")->execute([$_SESSION['user_id']]);
+$pdo->prepare("INSERT INTO check_views (user_id, last_viewed) VALUES (?, NOW()) ON DUPLICATE KEY UPDATE last_viewed = NOW()")->execute([$_SESSION['user_id']]);
 ?>
 
 <!DOCTYPE html>
@@ -42,12 +82,26 @@ $awaiting_check = $stmt->fetchAll();
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Management Dashboard - Flyer Development System</title>
     <link rel="stylesheet" href="public/css/style.css">
+    <style>
+        .notification {
+            padding: 10px;
+            margin-bottom: 10px;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        .notification.warning { background-color: #fff3cd; color: #856404; }
+        .notification.info { background-color: #d1ecf1; color: #0c5460; }
+        .notification.message { background-color: #d4edda; color: #155724; }
+        .notification.upload { background-color: #f8d7da; color: #721c24; }
+        .notification.check { background-color: #e2e3e5; color: #383d41; }
+    </style>
 </head>
 <body>
     <div class="container">
         <h1>Management Dashboard</h1>
         <nav>
             <ul>
+                <li><a href="#notifications">Notifications</a></li>
                 <li><a href="#projects">Projects</a></li>
                 <li><a href="#new-project">New Project</a></li>
                 <li><a href="logout.php">Logout</a></li>
@@ -57,7 +111,7 @@ $awaiting_check = $stmt->fetchAll();
         <section id="notifications">
             <h2>Notifications</h2>
             <?php if (count($awaiting_check) > 0): ?>
-                <div class="notification warning">
+                <div class="notification warning" data-type="awaiting_check">
                     <p>You have <?php echo count($awaiting_check); ?> project(s) awaiting your final review:</p>
                     <ul>
                         <?php foreach ($awaiting_check as $project): ?>
@@ -65,8 +119,28 @@ $awaiting_check = $stmt->fetchAll();
                         <?php endforeach; ?>
                     </ul>
                 </div>
-            <?php else: ?>
-                <p>No projects are currently awaiting your review.</p>
+            <?php endif; ?>
+
+            <?php foreach ($new_messages as $message): ?>
+                <div class="notification message" data-type="message" data-id="<?php echo $message['id']; ?>">
+                    <p>New message in project "<a href="views/project/project.php?id=<?php echo $message['project_id']; ?>"><?php echo htmlspecialchars($message['project_name']); ?></a>"</p>
+                </div>
+            <?php endforeach; ?>
+
+            <?php foreach ($new_uploads as $upload): ?>
+                <div class="notification upload" data-type="upload" data-id="<?php echo $upload['id']; ?>">
+                    <p>Designer has uploaded new draft (<?php echo $upload['current_draft']; ?>) for "<a href="views/project/project.php?id=<?php echo $upload['id']; ?>"><?php echo htmlspecialchars($upload['name']); ?></a>"</p>
+                </div>
+            <?php endforeach; ?>
+
+            <?php foreach ($new_checks as $check): ?>
+                <div class="notification check" data-type="check" data-id="<?php echo $check['id']; ?>">
+                    <p>Proofreader <?php echo htmlspecialchars($check['username']); ?> has checked draft <?php echo $check['draft_number']; ?> in project "<a href="views/project/project.php?id=<?php echo $check['project_id']; ?>"><?php echo htmlspecialchars($check['project_name']); ?></a>"</p>
+                </div>
+            <?php endforeach; ?>
+
+            <?php if (count($awaiting_check) == 0 && count($new_messages) == 0 && count($new_uploads) == 0 && count($new_checks) == 0): ?>
+                <p>No new notifications.</p>
             <?php endif; ?>
         </section>
 
@@ -121,9 +195,27 @@ $awaiting_check = $stmt->fetchAll();
     </div>
 
     <script>
-        // Add any necessary JavaScript here
         document.addEventListener('DOMContentLoaded', function() {
-            // You can add interactive features here if needed
+            const notifications = document.querySelectorAll('.notification');
+            notifications.forEach(notification => {
+                notification.addEventListener('click', function() {
+                    const type = this.dataset.type;
+                    const id = this.dataset.id;
+                    if (type === 'message') {
+                        fetch('mark_message_read.php', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/x-www-form-urlencoded',
+                            },
+                            body: 'message_id=' + id
+                        }).then(() => {
+                            this.style.display = 'none';
+                        });
+                    } else {
+                        this.style.display = 'none';
+                    }
+                });
+            });
         });
     </script>
 </body>
