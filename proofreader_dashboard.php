@@ -15,7 +15,7 @@ $stmt = $pdo->prepare("
             AND pc.user_id = :user_id 
             AND pc.draft_number = p.current_draft) as checked
     FROM projects p 
-    WHERE p.status IN ('design_pending', 'draft_review') 
+    WHERE p.status IN ('design_pending', 'draft_review', '') 
     ORDER BY p.created_at DESC
 ");
 $stmt->execute(['user_id' => $_SESSION['user_id']]);

@@ -10,7 +10,7 @@ if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'designer') {
 $stmt = $pdo->query("SELECT p.*, 
     (SELECT COUNT(*) FROM project_checks pc WHERE pc.project_id = p.id AND pc.user_id = {$_SESSION['user_id']}) as checked
     FROM projects p 
-    WHERE p.status IN ('design_pending', 'draft_review') 
+    WHERE p.status IN ('design_pending', 'draft_review', '') 
     ORDER BY p.created_at DESC");
 $projects = $stmt->fetchAll();
 ?>

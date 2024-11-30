@@ -10,7 +10,7 @@ if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'management') {
 $project_id = $_GET['id'] ?? null;
 
 if (!$project_id) {
-    header("Location: management_dashboard.php");
+    header("Location: ../../management_dashboard.php");
     exit;
 }
 
@@ -20,7 +20,7 @@ $stmt->execute([$project_id]);
 $project = $stmt->fetch();
 
 if (!$project) {
-    header("Location: management_dashboard.php");
+    header("Location: ../../management_dashboard.php");
     exit;
 }
 
@@ -37,6 +37,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['confirm_delete_projec
     // Redirect to dashboard
     header("Location: ../../management_dashboard.php");
     exit;
+}
+
+// Handle final approval
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['final_approval'])) {
+    // Update project status
+    $stmt = $pdo->prepare("UPDATE projects SET status = 'approved_for_print' WHERE id = ?");
+    $stmt->execute([$project_id]);
+
+    // Update all project checks to 'checked'
+    $stmt = $pdo->prepare("UPDATE project_checks SET status = 'checked' WHERE project_id = ? AND draft_number = ?");
+    $stmt->execute([$project_id, $project['current_draft']]);
+
+    // Close the chat room for this project
+    $stmt = $pdo->prepare("UPDATE chat_messages SET is_closed = 'yes' WHERE project_id = ?");
+    $stmt->execute([$project_id]);
+
+    // Refresh project details
+    $stmt = $pdo->prepare("SELECT * FROM projects WHERE id = ?");
+    $stmt->execute([$project_id]);
+    $project = $stmt->fetch();
 }
 
 // Handle CSV upload
@@ -99,7 +119,7 @@ $chat_messages = $stmt->fetchAll();
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['chat_message'])) {
     $message = trim($_POST['chat_message']);
     if (!empty($message)) {
-        $stmt = $pdo->prepare("INSERT INTO chat_messages (project_id, user_id, message) VALUES (?, ?, ?)");
+        $stmt = $pdo->prepare("INSERT INTO chat_messages (project_id, user_id, message, is_closed) VALUES (?, ?, ?, 'no')");
         $stmt->execute([$project_id, $_SESSION['user_id'], $message]);
         // Refresh chat messages
         $stmt = $pdo->prepare("SELECT cm.*, u.username, u.role 
@@ -113,6 +133,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['chat_message'])) {
     }
 }
 
+// Fetch project checks
+$stmt = $pdo->prepare("SELECT pc.*, u.username 
+                       FROM project_checks pc 
+                       JOIN users u ON pc.user_id = u.id 
+                       WHERE pc.project_id = ? AND pc.draft_number = ?
+                       ORDER BY pc.check_date DESC");
+$stmt->execute([$project_id, $project['current_draft']]);
+$project_checks = $stmt->fetchAll();
 ?>
 
 <!DOCTYPE html>
@@ -125,178 +153,181 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['chat_message'])) {
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
         body {
-    font-family: Arial, sans-serif;
-    line-height: 1.6;
-    margin: 0;
-    padding: 0;
-    background-color: #121212;
-    color: #e0e0e0;
-}
-.container {
-    display: flex;
-    max-width: 1200px;
-    margin: 0 auto;
-    padding: 20px;
-}
-.chat-sidebar {
-    width: 300px;
-    padding: 20px;
-    border-right: 1px solid #444;
-    background-color: #1e1e1e;
-    box-shadow: 2px 0 5px rgba(0,0,0,0.3);
-}
-.main-content {
-    flex-grow: 1;
-    padding: 20px;
-}
-#chat-container {
-    height: 400px;
-    overflow-y: auto;
-    border: 1px solid #444;
-    padding: 10px;
-    margin-bottom: 10px;
-    background-color: #2a2a2a;
-}
-.chat-message {
-    margin-bottom: 10px;
-    padding: 10px;
-    border-radius: 5px;
-    background-color: #3a3a3a;
-    color: #e0e0e0;
-}
-.chat-message .username {
-    font-weight: bold;
-    color: #4CAF50;
-}
-.chat-message .timestamp {
-    font-size: 0.8em;
-    color: #aaa;
-}
-.modal {
-    display: none;
-    position: fixed;
-    z-index: 1;
-    left: 0;
-    top: 0;
-    width: 100%;
-    height: 100%;
-    overflow: auto;
-    background-color: rgba(0,0,0,0.6);
-}
-.modal-content {
-    background-color: #2a2a2a;
-    margin: 15% auto;
-    padding: 20px;
-    border: 1px solid #444;
-    width: 80%;
-    max-width: 500px;
-    box-shadow: 0 4px 8px rgba(0,0,0,0.3);
-    border-radius: 5px;
-    color: #e0e0e0;
-}
-.modal-content p {
-    color: #e0e0e0;
-}
-.close {
-    color: #aaa;
-    float: right;
-    font-size: 28px;
-    font-weight: bold;
-}
-.close:hover,
-.close:focus {
-    color: #fff;
-    text-decoration: none;
-    cursor: pointer;
-}
-.modal-buttons {
-    text-align: right;
-    margin-top: 20px;
-}
-.modal-buttons button {
-    margin-left: 10px;
-}
-h1, h2 {
-    color: #4CAF50;
-    text-align: center;
-}
-nav ul {
-    list-style-type: none;
-    padding: 0;
-    display: flex;
-    justify-content: center;
-    margin-bottom: 20px;
-}
-nav ul li {
-    margin: 0 10px;
-}
-nav ul li a {
-    text-decoration: none;
-    color: #4CAF50;
-    padding: 5px 10px;
-    border-radius: 5px;
-    transition: background-color 0.3s;
-}
-nav ul li a:hover {
-    background-color: rgba(76, 175, 80, 0.2);
-}
-section {
-    background-color: #1e1e1e;
-    padding: 20px;
-    margin-bottom: 20px;
-    border-radius: 5px;
-    box-shadow: 0 2px 5px rgba(0,0,0,0.3);
-    transition: box-shadow 0.3s;
-    border: 1px solid #444;
-}
-section:hover {
-    box-shadow: 0 4px 8px rgba(0,0,0,0.5);
-}
-button, .btn {
-    background-color: #4CAF50;
-    color: white;
-    padding: 10px 15px;
-    border: none;
-    border-radius: 5px;
-    cursor: pointer;
-    transition: background-color 0.3s;
-}
-button:hover, .btn:hover {
-    background-color: #45a049;
-}
-.btn-danger {
-    background-color: #f44336;
-}
-.btn-danger:hover {
-    background-color: #d32f2f;
-}
-table {
-    width: 100%;
-    border-collapse: collapse;
-}
-th, td {
-    padding: 12px;
-    text-align: left;
-    border-bottom: 1px solid #444;
-    color: #e0e0e0;
-}
-th {
-    background-color: #2a2a2a;
-    font-weight: bold;
-    color: #4CAF50;
-}
-tr:hover {
-    background-color: rgba(76, 175, 80, 0.1);
-}
-/* Form elements */
-input[type="file"], textarea {
-    background-color: #2a2a2a;
-    color: #e0e0e0;
-    border: 1px solid #444;
-    padding: 10px;
-    width: 100%;
-    border-radius: 5px;
-}
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            margin: 0;
+            padding: 0;
+            background-color: #121212;
+            color: #e0e0e0;
+        }
+        .container {
+            display: flex;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .chat-sidebar {
+            width: 300px;
+            padding: 20px;
+            border-right: 1px solid #444;
+            background-color: #1e1e1e;
+            box-shadow: 2px 0 5px rgba(0,0,0,0.3);
+        }
+        .main-content {
+            flex-grow: 1;
+            padding: 20px;
+        }
+        #chat-container {
+            height: 400px;
+            overflow-y: auto;
+            border: 1px solid #444;
+            padding: 10px;
+            margin-bottom: 10px;
+            background-color: #2a2a2a;
+        }
+        .chat-message {
+            margin-bottom: 10px;
+            padding: 10px;
+            border-radius: 5px;
+            background-color: #3a3a3a;
+            color: #e0e0e0;
+        }
+        .chat-message .username {
+            font-weight: bold;
+            color: #4CAF50;
+        }
+        .chat-message .timestamp {
+            font-size: 0.8em;
+            color: #aaa;
+        }
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            overflow: auto;
+            background-color: rgba(0,0,0,0.6);
+        }
+        .modal-content {
+            background-color: #2a2a2a;
+            margin: 15% auto;
+            padding: 20px;
+            border: 1px solid #444;
+            width: 80%;
+            max-width: 500px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.3);
+            border-radius: 5px;
+            color: #e0e0e0;
+        }
+        .modal-content p {
+            color: #e0e0e0;
+        }
+        .close {
+            color: #aaa;
+            float: right;
+            font-size: 28px;
+            font-weight: bold;
+        }
+        .close:hover,
+        .close:focus {
+            color: #fff;
+            text-decoration: none;
+            cursor: pointer;
+        }
+        .modal-buttons {
+            text-align: right;
+            margin-top: 20px;
+        }
+        .modal-buttons button {
+            margin-left: 10px;
+        }
+        h1, h2 {
+            color: #4CAF50;
+            text-align: center;
+        }
+        nav ul {
+            list-style-type: none;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            margin-bottom: 20px;
+        }
+        nav ul li {
+            margin: 0 10px;
+        }
+        nav ul li a {
+            text-decoration: none;
+            color: #4CAF50;
+            padding: 5px 10px;
+            border-radius: 5px;
+            transition: background-color 0.3s;
+        }
+        nav ul li a:hover {
+            background-color: rgba(76, 175, 80, 0.2);
+        }
+        section {
+            background-color: #1e1e1e;
+            padding: 20px;
+            margin-bottom: 20px;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+            transition: box-shadow 0.3s;
+            border: 1px solid #444;
+        }
+        section:hover {
+            box-shadow: 0 4px 8px rgba(0,0,0,0.5);
+        }
+        button, .btn {
+            background-color: #4CAF50;
+            color: white;
+            padding: 10px 15px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+        button:hover, .btn:hover {
+            background-color: #45a049;
+        }
+        .btn-danger {
+            background-color: #f44336;
+        }
+        .btn-danger:hover {
+            background-color: #d32f2f;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #444;
+            color: #e0e0e0;
+        }
+        th {
+            background-color: #2a2a2a;
+            font-weight: bold;
+            color: #4CAF50;
+        }
+        tr:hover {
+            background-color: rgba(76, 175, 80, 0.1);
+        }
+        input[type="file"], textarea {
+            background-color: #2a2a2a;
+            color: #e0e0e0;
+            border: 1px solid #444;
+            padding: 10px;
+            width: 100%;
+            border-radius: 5px;
+        }
+        .error {
+            color: #f44336;
+            font-weight: bold;
+        }
     </style>
 </head>
 <body>
@@ -334,12 +365,39 @@ input[type="file"], textarea {
                 <p><strong>Status:</strong> <?php echo htmlspecialchars($project['status']); ?></p>
                 <p><strong>Date:</strong> <?php echo htmlspecialchars($project['project_date']); ?></p>
                 <p><strong>Last Update:</strong> <?php echo htmlspecialchars($project['updated_at']); ?></p>
-                <p><strong>Comment:</strong> <?php echo htmlspecialchars($project['comment']); ?></p>
+                <p><strong>Comment:</strong> <?php echo htmlspecialchars($project['comment'] ?? 'No comment'); ?></p>
             </section>
 
             <section id="project-actions">
                 <h2><i class="fas fa-cogs"></i> Project Actions</h2>
                 <button id="deleteProjectBtn" class="btn btn-danger"><i class="fas fa-trash-alt"></i> Delete Project</button>
+                <?php if ($project['status'] != 'approved_for_print'): ?>
+                    <form method="POST" style="display: inline;">
+                        <button type="submit" name="final_approval" class="btn btn-success"><i class="fas fa-check-circle"></i> Final Approval</button>
+                    </form>
+                <?php endif; ?>
+            </section>
+
+            <section id="project-checks">
+                <h2><i class="fas fa-tasks"></i> Project Checks</h2>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>User</th>
+                            <th>Status</th>
+                            <th>Check Date</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($project_checks as $check): ?>
+                            <tr>
+                                <td><?php echo htmlspecialchars($check['username']); ?></td>
+                                <td><?php echo htmlspecialchars($check['status']); ?></td>
+                                <td><?php echo htmlspecialchars($check['check_date']); ?></td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
             </section>
 
             <section id="pdf-preview">
@@ -451,3 +509,4 @@ input[type="file"], textarea {
     </script>
 </body>
 </html>
+
