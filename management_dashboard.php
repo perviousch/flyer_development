@@ -29,7 +29,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['create_project'])) {
 
 // Fetch projects awaiting manager's check
 $stmt = $pdo->prepare("SELECT p.* FROM projects p
-    LEFT JOIN project_checks pc ON p.id = pc.project_id AND pc.user_id = ?
+    LEFT JOIN project_checks pc ON p.id = pc.project_id AND pc.user_id = ? AND pc.checker_role = 'management'
     WHERE p.status = 'final_review' AND pc.id IS NULL");
 $stmt->execute([$_SESSION['user_id']]);
 $awaiting_check = $stmt->fetchAll();
@@ -40,7 +40,7 @@ $stmt = $pdo->prepare("
     FROM chat_messages cm
     JOIN projects p ON cm.project_id = p.id
     LEFT JOIN viewed_messages vm ON cm.id = vm.message_id AND vm.user_id = ?
-    WHERE vm.id IS NULL
+    WHERE vm.id IS NULL AND cm.is_closed = FALSE
     ORDER BY cm.created_at DESC
 ");
 $stmt->execute([$_SESSION['user_id']]);
@@ -48,11 +48,11 @@ $new_messages = $stmt->fetchAll();
 
 // Fetch new designer uploads
 $stmt = $pdo->prepare("
-    SELECT p.id, p.name, p.current_draft
-    FROM projects p
-    WHERE p.pdf_file_path IS NOT NULL
-    AND p.updated_at > (SELECT COALESCE(MAX(last_viewed), '1970-01-01') FROM project_views WHERE user_id = ?)
-    ORDER BY p.updated_at DESC
+    SELECT fv.id, p.name, fv.version_number, fv.uploaded_at
+    FROM file_versions fv
+    JOIN projects p ON fv.project_id = p.id
+    WHERE fv.uploaded_at > (SELECT COALESCE(MAX(last_viewed), '1970-01-01') FROM project_views WHERE user_id = ?)
+    ORDER BY fv.uploaded_at DESC
 ");
 $stmt->execute([$_SESSION['user_id']]);
 $new_uploads = $stmt->fetchAll();
@@ -64,7 +64,7 @@ $stmt = $pdo->prepare("
     JOIN projects p ON pc.project_id = p.id
     JOIN users u ON pc.user_id = u.id
     WHERE pc.check_date > (SELECT COALESCE(MAX(last_viewed), '1970-01-01') FROM check_views WHERE user_id = ?)
-    AND u.role = 'proof_reader'
+    AND pc.checker_role = 'proofreader'
     ORDER BY pc.check_date DESC
 ");
 $stmt->execute([$_SESSION['user_id']]);
@@ -129,7 +129,7 @@ $pdo->prepare("INSERT INTO check_views (user_id, last_viewed) VALUES (?, NOW()) 
 
             <?php foreach ($new_uploads as $upload): ?>
                 <div class="notification upload" data-type="upload" data-id="<?php echo $upload['id']; ?>">
-                    <p>Designer has uploaded new draft (<?php echo $upload['current_draft']; ?>) for "<a href="views/project/project.php?id=<?php echo $upload['id']; ?>"><?php echo htmlspecialchars($upload['name']); ?></a>"</p>
+                    <p>Designer has uploaded new version (<?php echo $upload['version_number']; ?>) for "<a href="views/project/project.php?id=<?php echo $upload['id']; ?>"><?php echo htmlspecialchars($upload['name']); ?></a>"</p>
                 </div>
             <?php endforeach; ?>
 
